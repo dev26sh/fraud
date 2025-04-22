@@ -10,6 +10,13 @@ class FraudDetectionModel:
     def __init__(self):
         self.model = None
         self.scaler = StandardScaler()
+        self.features = [
+            'amount', 'amount_log', 'is_high_amount', 
+            'hour', 'is_unusual_hour', 'day_of_week',
+            'sender_frequency', 'receiver_frequency',
+            'amount_hour_interaction',
+            'sender_hash', 'receiver_hash'
+        ]
         
     def preprocess(self, df, training=True):
         # Feature engineering
@@ -40,14 +47,7 @@ class FraudDetectionModel:
         df['receiver_hash'] = pd.util.hash_array(df['receiver'].values) % 10_000_000
         
         # Select features
-        features = [
-            'amount', 'amount_log', 'is_high_amount', 'hour', 
-            'is_unusual_hour', 'day_of_week', 'amount_hour_interaction',
-            'sender_frequency', 'receiver_frequency',
-            'sender_hash', 'receiver_hash'
-        ]
-        
-        X = df[features]
+        X = df[self.features]
         y = df['is_fraud'] if 'is_fraud' in df.columns else None
         
         # Scale features
@@ -65,19 +65,48 @@ class FraudDetectionModel:
         # Preprocess
         X, y = self.preprocess(df, training=True)
         
-        # Split data
-        X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+        # Get feature names - this is the missing part
+        features = [
+            'amount', 'amount_log', 'is_high_amount', 
+            'hour', 'is_unusual_hour', 'day_of_week',
+            'sender_frequency', 'receiver_frequency',
+            'amount_hour_interaction',
+            'sender_hash', 'receiver_hash'
+        ]
         
-        # Train model
-        self.model = RandomForestClassifier(n_estimators=100, random_state=42)
+        # Split data
+        X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42, stratify=y)
+        
+        # Train model with improved parameters
+        self.model = RandomForestClassifier(
+            n_estimators=500, 
+            max_depth=15,
+            min_samples_split=10,
+            min_samples_leaf=4,
+            class_weight='balanced',
+            random_state=42,
+            n_jobs=-1
+        )
         self.model.fit(X_train, y_train)
         
-        # Evaluate
-        train_score = self.model.score(X_train, y_train)
-        test_score = self.model.score(X_test, y_test)
+        # Evaluate with more metrics
+        from sklearn.metrics import classification_report, roc_auc_score
         
-        print(f"Training accuracy: {train_score:.4f}")
-        print(f"Testing accuracy: {test_score:.4f}")
+        # Make predictions
+        y_pred = self.model.predict(X_test)
+        y_proba = self.model.predict_proba(X_test)[:, 1]
+        
+        # Calculate metrics
+        print("\n===== MODEL EVALUATION =====")
+        print(classification_report(y_test, y_pred))
+        print(f"ROC AUC: {roc_auc_score(y_test, y_proba):.4f}")
+        
+        # Calculate feature importance - fixed here
+        importances = self.model.feature_importances_
+        feature_importance = sorted(zip(features, importances), key=lambda x: x[1], reverse=True)
+        print("\n===== FEATURE IMPORTANCE =====")
+        for feature, importance in feature_importance:
+            print(f"{feature}: {importance:.4f}")
         
         # Save model
         os.makedirs('ml/saved_models', exist_ok=True)
