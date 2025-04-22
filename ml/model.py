@@ -11,10 +11,14 @@ class FraudDetectionModel:
         self.model = None
         self.scaler = StandardScaler()
         
-    def preprocess(self, df):
+    def preprocess(self, df, training=True):
         # Feature engineering
-        df['hour'] = pd.to_datetime(df['timestamp']).dt.hour
-        df['day_of_week'] = pd.to_datetime(df['timestamp']).dt.dayofweek
+        if 'timestamp' in df.columns:
+            df['hour'] = pd.to_datetime(df['timestamp']).dt.hour
+            df['day_of_week'] = pd.to_datetime(df['timestamp']).dt.dayofweek
+        else:
+            df['hour'] = 0
+            df['day_of_week'] = 0
         
         # Calculate transaction frequency
         sender_counts = df.groupby('sender').size().reset_index(name='sender_frequency')
@@ -23,21 +27,34 @@ class FraudDetectionModel:
         df = pd.merge(df, sender_counts, on='sender', how='left')
         df = pd.merge(df, receiver_counts, on='receiver', how='left')
         
-        # Convert addresses to numerical features
-        df['sender_hash'] = pd.util.hash_array(df['sender'].values)
-        df['receiver_hash'] = pd.util.hash_array(df['receiver'].values)
+        # Add new features to better capture fraud patterns
+        df['amount_log'] = np.log1p(df['amount'])  # Log transformation of amount
+        df['is_high_amount'] = (df['amount'] > 8000).astype(int)  # Binary flag for high amounts
+        df['is_unusual_hour'] = ((df['hour'] < 9) | (df['hour'] > 17)).astype(int)  # Business hours check
+        
+        # Add interaction features
+        df['amount_hour_interaction'] = df['amount'] * df['hour']
+        
+        # Convert addresses to numerical features (hash)
+        df['sender_hash'] = pd.util.hash_array(df['sender'].values) % 10_000_000
+        df['receiver_hash'] = pd.util.hash_array(df['receiver'].values) % 10_000_000
         
         # Select features
         features = [
-            'amount', 'hour', 'day_of_week', 
-            'sender_frequency', 'receiver_frequency'
+            'amount', 'amount_log', 'is_high_amount', 'hour', 
+            'is_unusual_hour', 'day_of_week', 'amount_hour_interaction',
+            'sender_frequency', 'receiver_frequency',
+            'sender_hash', 'receiver_hash'
         ]
         
         X = df[features]
         y = df['is_fraud'] if 'is_fraud' in df.columns else None
         
         # Scale features
-        X_scaled = self.scaler.fit_transform(X) if y is not None else self.scaler.transform(X)
+        if training:
+            X_scaled = self.scaler.fit_transform(X)
+        else:
+            X_scaled = self.scaler.transform(X)
         
         return X_scaled, y
     
@@ -46,7 +63,7 @@ class FraudDetectionModel:
         df = pd.read_csv(data_path)
         
         # Preprocess
-        X, y = self.preprocess(df)
+        X, y = self.preprocess(df, training=True)
         
         # Split data
         X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
@@ -79,7 +96,7 @@ class FraudDetectionModel:
             df = pd.DataFrame(transaction_data)
         
         # Preprocess
-        X, _ = self.preprocess(df)
+        X, _ = self.preprocess(df, training=False)
         
         # Predict
         fraud_proba = self.model.predict_proba(X)[:, 1]
