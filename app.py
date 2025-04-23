@@ -123,7 +123,7 @@ def main(mode='monitor'):
                     traceback.print_exc(limit=1)
                 
                 print("-" * 60)
-                time.sleep(1)  # Small delay between transactions
+                #time.sleep(1)  # Small delay between transactions
             
             except Exception as e:
                 print(f"Error processing transaction {i+1}: {e}")
@@ -143,10 +143,18 @@ def main(mode='monitor'):
         print(f"Summary: Found {fraud_count} fraudulent transactions in CSV of {total_transactions} total)")
             
     elif mode == 'monitor':
-        # Rest of the monitor mode code remains unchanged
         print("Running in monitoring mode: continuously checking for new transactions")
         
-        last_checked_id = 0
+        # Initialize counters for statistics
+        # Initialize last_checked_id to the current transaction count to avoid monitoring old transactions
+        last_checked_id = blockchain.contract.functions.transactionCount().call()
+        print(f"Starting monitoring from transaction ID: {last_checked_id}")
+        # last_checked_id = 0
+        fraud_count = 0
+        ml_correct = 0
+        ml_missed = 0
+        total_transactions = 0
+        
         while True:
             try:
                 # Get the latest transaction count
@@ -154,29 +162,66 @@ def main(mode='monitor'):
                 
                 # Check for new transactions
                 if transaction_count > last_checked_id:
-                    print(f"Found {transaction_count - last_checked_id} new transactions")
+                    print(f"\nFound {transaction_count - last_checked_id} new transactions")
                     
                     # Analyze each new transaction
                     for tx_id in range(last_checked_id + 1, transaction_count + 1):
                         blockchain_tx = blockchain.get_transaction(tx_id)
+                        total_transactions += 1
+                        
+                        # Display detailed transaction information
+                        print("\n" + "="*60)
+                        print(f"TRANSACTION #{tx_id}")
+                        print("-"*60)
+                        print(f"Transaction ID: {tx_id}")
+                        print(f"Amount: {blockchain_tx['amount']}")
+                        print(f"Receiver: {blockchain_tx['receiver']}")
+                        print(f"Sender: {blockchain_tx.get('sender', 'N/A')}")
+                        
+                        # Convert timestamp to readable format
+                        timestamp = datetime.datetime.fromtimestamp(blockchain_tx['timestamp'])
+                        print(f"Timestamp: {timestamp.strftime('%Y-%m-%d %H:%M:%S')}")
+                        print(f"Hour of day: {timestamp.hour}")
+                        
+                        # Get ML analysis
                         prediction = ml.analyze_transaction(blockchain_tx)
+                        print(f"ML Analysis: {prediction}")
                         
-                        print(f"Transaction {tx_id}: Fraud probability {prediction['fraud_probability']}")
+                        # Check fraud probability from ML
+                        fraud_prob = prediction['fraud_probability']
                         
-                        # Lower threshold from 0.7 to 0.4 based on average fraud score (0.34)
-                        if prediction['fraud_probability'] > 0.4:
-                            blockchain.flag_transaction(tx_id, prediction['fraud_probability'])
-                            print(f"Transaction {tx_id} flagged as potentially fraudulent")
-                    
-                    last_checked_id = transaction_count
+                        # Process the transaction based on ML probability
+                        if fraud_prob > 0.4:
+                            print(f"⚠️ SUSPICIOUS TRANSACTION: ML gives {fraud_prob:.2f} probability of fraud")
+                            blockchain.flag_transaction(tx_id, fraud_prob)
+                            fraud_count += 1
+                            ml_correct += 1
+                        else:
+                            print(f"✓ NORMAL TRANSACTION: ML gives {fraud_prob:.2f} probability of fraud")
+                        
+                        print("="*60)
                 
+                # Update last checked transaction
+                last_checked_id = transaction_count
+                
+                # Display statistics
+                if total_transactions > 0:
+                    print("\n===== ML MODEL PERFORMANCE =====")
+                    print(f"Total transactions processed: {total_transactions}")
+                    print(f"Suspicious transactions detected: {fraud_count}")
+                    print(f"Detection rate: {fraud_count/total_transactions:.2f}")
+                    print("===============================\n")
+            
+                # Just print a dot to show the system is still running
+                print(".", end="", flush=True)
                 time.sleep(5)  # Check for new transactions every 5 seconds
                 
             except KeyboardInterrupt:
-                print("Monitoring stopped")
+                print("\nMonitoring stopped")
                 break
             except Exception as e:
-                print(f"Error: {e}")
+                print(f"\nError: {e}")
+                traceback.print_exc(limit=1)
                 time.sleep(10)  # Wait longer in case of errors
 
 if __name__ == "__main__":
